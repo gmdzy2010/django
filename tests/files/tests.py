@@ -1,3 +1,4 @@
+import errno
 import gzip
 import os
 import struct
@@ -10,7 +11,10 @@ from django.core.files import File
 from django.core.files.base import ContentFile
 from django.core.files.move import file_move_safe
 from django.core.files.temp import NamedTemporaryFile
-from django.core.files.uploadedfile import SimpleUploadedFile, UploadedFile
+from django.core.files.uploadedfile import (
+    InMemoryUploadedFile, SimpleUploadedFile, TemporaryUploadedFile,
+    UploadedFile,
+)
 
 try:
     from PIL import Image
@@ -37,6 +41,23 @@ class FileTests(unittest.TestCase):
             self.assertFalse(f.closed)
         self.assertTrue(f.closed)
         self.assertTrue(orig_file.closed)
+
+    def test_open_resets_opened_file_to_start_and_returns_context_manager(self):
+        file = File(BytesIO(b'content'))
+        file.read()
+        with file.open() as f:
+            self.assertEqual(f.read(), b'content')
+
+    def test_open_reopens_closed_file_and_returns_context_manager(self):
+        temporary_file = tempfile.NamedTemporaryFile(delete=False)
+        file = File(temporary_file)
+        try:
+            file.close()
+            with file.open() as f:
+                self.assertFalse(f.closed)
+        finally:
+            # remove temporary file
+            os.unlink(file.name)
 
     def test_namedtemporaryfile_closes(self):
         """
@@ -178,6 +199,38 @@ class ContentFileTestCase(unittest.TestCase):
         self.assertIsInstance(ContentFile(b"content").read(), bytes)
         self.assertIsInstance(ContentFile("español").read(), str)
 
+    def test_open_resets_file_to_start_and_returns_context_manager(self):
+        file = ContentFile(b'content')
+        with file.open() as f:
+            self.assertEqual(f.read(), b'content')
+        with file.open() as f:
+            self.assertEqual(f.read(), b'content')
+
+    def test_size_changing_after_writing(self):
+        """ContentFile.size changes after a write()."""
+        f = ContentFile('')
+        self.assertEqual(f.size, 0)
+        f.write('Test ')
+        f.write('string')
+        self.assertEqual(f.size, 11)
+        with f.open() as fh:
+            self.assertEqual(fh.read(), 'Test string')
+
+
+class InMemoryUploadedFileTests(unittest.TestCase):
+    def test_open_resets_file_to_start_and_returns_context_manager(self):
+        uf = InMemoryUploadedFile(StringIO('1'), '', 'test', 'text/plain', 1, 'utf8')
+        uf.read()
+        with uf.open() as f:
+            self.assertEqual(f.read(), '1')
+
+
+class TemporaryUploadedFileTests(unittest.TestCase):
+    def test_extension_kept(self):
+        """The temporary file name has the same suffix as the original file."""
+        with TemporaryUploadedFile('test.txt', 'text/plain', 1, 'utf8') as temp_file:
+            self.assertTrue(temp_file.file.name.endswith('.upload.txt'))
+
 
 class DimensionClosingBug(unittest.TestCase):
     """
@@ -201,7 +254,7 @@ class DimensionClosingBug(unittest.TestCase):
         """
         # We need to inject a modified open() builtin into the images module
         # that checks if the file was closed properly if the function is
-        # called with a filename instead of an file object.
+        # called with a filename instead of a file object.
         # get_image_dimensions will call our catching_open instead of the
         # regular builtin one.
 
@@ -290,14 +343,21 @@ class GetImageDimensionsTests(unittest.TestCase):
                 size = images.get_image_dimensions(fh)
                 self.assertEqual(size, (None, None))
 
+    def test_webp(self):
+        img_path = os.path.join(os.path.dirname(__file__), 'test.webp')
+        with open(img_path, 'rb') as fh:
+            size = images.get_image_dimensions(fh)
+        self.assertEqual(size, (540, 405))
+
 
 class FileMoveSafeTests(unittest.TestCase):
     def test_file_move_overwrite(self):
         handle_a, self.file_a = tempfile.mkstemp()
         handle_b, self.file_b = tempfile.mkstemp()
 
-        # file_move_safe should raise an IOError exception if destination file exists and allow_overwrite is False
-        with self.assertRaises(IOError):
+        # file_move_safe() raises OSError if the destination file exists and
+        # allow_overwrite is False.
+        with self.assertRaises(FileExistsError):
             file_move_safe(self.file_a, self.file_b, allow_overwrite=False)
 
         # should allow it and continue on if allow_overwrite is True
@@ -305,6 +365,30 @@ class FileMoveSafeTests(unittest.TestCase):
 
         os.close(handle_a)
         os.close(handle_b)
+
+    def test_file_move_copystat_cifs(self):
+        """
+        file_move_safe() ignores a copystat() EPERM PermissionError. This
+        happens when the destination filesystem is CIFS, for example.
+        """
+        copystat_EACCES_error = PermissionError(errno.EACCES, 'msg')
+        copystat_EPERM_error = PermissionError(errno.EPERM, 'msg')
+        handle_a, self.file_a = tempfile.mkstemp()
+        handle_b, self.file_b = tempfile.mkstemp()
+        try:
+            # This exception is required to reach the copystat() call in
+            # file_safe_move().
+            with mock.patch('django.core.files.move.os.rename', side_effect=OSError()):
+                # An error besides EPERM isn't ignored.
+                with mock.patch('django.core.files.move.copystat', side_effect=copystat_EACCES_error):
+                    with self.assertRaises(PermissionError):
+                        file_move_safe(self.file_a, self.file_b, allow_overwrite=True)
+                # EPERM is ignored.
+                with mock.patch('django.core.files.move.copystat', side_effect=copystat_EPERM_error):
+                    self.assertIsNone(file_move_safe(self.file_a, self.file_b, allow_overwrite=True))
+        finally:
+            os.close(handle_a)
+            os.close(handle_b)
 
 
 class SpooledTempTests(unittest.TestCase):

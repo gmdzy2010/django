@@ -3,18 +3,16 @@ import calendar
 import datetime
 import re
 import unicodedata
-import warnings
 from binascii import Error as BinasciiError
 from email.utils import formatdate
 from urllib.parse import (
-    quote, quote_plus, unquote, unquote_plus, urlencode as original_urlencode,
-    urlparse,
+    ParseResult, SplitResult, _coerce_args, _splitnetloc, _splitparams, quote,
+    quote_plus, scheme_chars, unquote, unquote_plus,
+    urlencode as original_urlencode, uses_params,
 )
 
 from django.core.exceptions import TooManyFieldsSent
 from django.utils.datastructures import MultiValueDict
-from django.utils.deprecation import RemovedInDjango21Warning
-from django.utils.encoding import force_bytes
 from django.utils.functional import keep_lazy_text
 
 # based on RFC 7232, Appendix C
@@ -89,25 +87,35 @@ def urlencode(query, doseq=False):
         query = query.lists()
     elif hasattr(query, 'items'):
         query = query.items()
-    return original_urlencode(
-        [(k, [str(i) for i in v] if isinstance(v, (list, tuple)) else str(v))
-         for k, v in query],
-        doseq
-    )
-
-
-def cookie_date(epoch_seconds=None):
-    """
-    Format the time to ensure compatibility with Netscape's cookie standard.
-
-    `epoch_seconds` is a floating point number expressed in seconds since the
-    epoch, in UTC - such as that outputted by time.time(). If set to None, it
-    defaults to the current time.
-
-    Output a string in the format 'Wdy, DD-Mon-YYYY HH:MM:SS GMT'.
-    """
-    rfcdate = formatdate(epoch_seconds)
-    return '%s-%s-%s GMT' % (rfcdate[:7], rfcdate[8:11], rfcdate[12:25])
+    query_params = []
+    for key, value in query:
+        if value is None:
+            raise TypeError(
+                'Cannot encode None in a query string. Did you mean to pass '
+                'an empty string or omit the value?'
+            )
+        elif isinstance(value, (str, bytes)):
+            query_val = value
+        else:
+            try:
+                itr = iter(value)
+            except TypeError:
+                query_val = value
+            else:
+                # Consume generators and iterators, even when doseq=True, to
+                # work around https://bugs.python.org/issue31706.
+                query_val = []
+                for item in itr:
+                    if item is None:
+                        raise TypeError(
+                            'Cannot encode None in a query string. Did you '
+                            'mean to pass an empty string or omit the value?'
+                        )
+                    elif not isinstance(item, bytes):
+                        item = str(item)
+                    query_val.append(item)
+        query_params.append((key, query_val))
+    return original_urlencode(query_params, doseq)
 
 
 def http_date(epoch_seconds=None):
@@ -133,7 +141,7 @@ def parse_http_date(date):
 
     Return an integer expressed in seconds since the epoch, in UTC.
     """
-    # emails.Util.parsedate does the job for RFC1123 dates; unfortunately
+    # email.utils.parsedate() does the job for RFC1123 dates; unfortunately
     # RFC7231 makes it mandatory to support RFC850 dates too. So we roll
     # our own RFC-compliant parsing.
     for regex in RFC1123_DATE, RFC850_DATE, ASCTIME_DATE:
@@ -201,10 +209,10 @@ def int_to_base36(i):
 
 def urlsafe_base64_encode(s):
     """
-    Encode a bytestring in base64 for use in URLs. Strip any trailing equal
-    signs.
+    Encode a bytestring to a base64 string for use in URLs. Strip any trailing
+    equal signs.
     """
-    return base64.urlsafe_b64encode(s).rstrip(b'\n=')
+    return base64.urlsafe_b64encode(s).rstrip(b'\n=').decode('ascii')
 
 
 def urlsafe_base64_decode(s):
@@ -212,7 +220,7 @@ def urlsafe_base64_decode(s):
     Decode a base64 encoded string. Add back any trailing equal signs that
     might have been stripped.
     """
-    s = force_bytes(s)
+    s = s.encode()
     try:
         return base64.urlsafe_b64decode(s.ljust(len(s) + len(s) % 4, b'='))
     except (LookupError, BinasciiError) as e:
@@ -263,7 +271,7 @@ def is_same_domain(host, pattern):
     )
 
 
-def is_safe_url(url, host=None, allowed_hosts=None, require_https=False):
+def is_safe_url(url, allowed_hosts, require_https=False):
     """
     Return ``True`` if the url is a safe redirection (i.e. it doesn't point to
     a different host and uses a safe scheme).
@@ -279,18 +287,61 @@ def is_safe_url(url, host=None, allowed_hosts=None, require_https=False):
         return False
     if allowed_hosts is None:
         allowed_hosts = set()
-    if host:
-        warnings.warn(
-            "The host argument is deprecated, use allowed_hosts instead.",
-            RemovedInDjango21Warning,
-            stacklevel=2,
-        )
-        # Avoid mutating the passed in allowed_hosts.
-        allowed_hosts = allowed_hosts | {host}
+    elif isinstance(allowed_hosts, str):
+        allowed_hosts = {allowed_hosts}
     # Chrome treats \ completely as / in paths but it could be part of some
     # basic auth credentials so we need to check both URLs.
     return (_is_safe_url(url, allowed_hosts, require_https=require_https) and
             _is_safe_url(url.replace('\\', '/'), allowed_hosts, require_https=require_https))
+
+
+# Copied from urllib.parse.urlparse() but uses fixed urlsplit() function.
+def _urlparse(url, scheme='', allow_fragments=True):
+    """Parse a URL into 6 components:
+    <scheme>://<netloc>/<path>;<params>?<query>#<fragment>
+    Return a 6-tuple: (scheme, netloc, path, params, query, fragment).
+    Note that we don't break the components up in smaller bits
+    (e.g. netloc is a single string) and we don't expand % escapes."""
+    url, scheme, _coerce_result = _coerce_args(url, scheme)
+    splitresult = _urlsplit(url, scheme, allow_fragments)
+    scheme, netloc, url, query, fragment = splitresult
+    if scheme in uses_params and ';' in url:
+        url, params = _splitparams(url)
+    else:
+        params = ''
+    result = ParseResult(scheme, netloc, url, params, query, fragment)
+    return _coerce_result(result)
+
+
+# Copied from urllib.parse.urlsplit() with
+# https://github.com/python/cpython/pull/661 applied.
+def _urlsplit(url, scheme='', allow_fragments=True):
+    """Parse a URL into 5 components:
+    <scheme>://<netloc>/<path>?<query>#<fragment>
+    Return a 5-tuple: (scheme, netloc, path, query, fragment).
+    Note that we don't break the components up in smaller bits
+    (e.g. netloc is a single string) and we don't expand % escapes."""
+    url, scheme, _coerce_result = _coerce_args(url, scheme)
+    netloc = query = fragment = ''
+    i = url.find(':')
+    if i > 0:
+        for c in url[:i]:
+            if c not in scheme_chars:
+                break
+        else:
+            scheme, url = url[:i].lower(), url[i + 1:]
+
+    if url[:2] == '//':
+        netloc, url = _splitnetloc(url, 2)
+        if (('[' in netloc and ']' not in netloc) or
+                (']' in netloc and '[' not in netloc)):
+            raise ValueError("Invalid IPv6 URL")
+    if allow_fragments and '#' in url:
+        url, fragment = url.split('#', 1)
+    if '?' in url:
+        url, query = url.split('?', 1)
+    v = SplitResult(scheme, netloc, url, query, fragment)
+    return _coerce_result(v)
 
 
 def _is_safe_url(url, allowed_hosts, require_https=False):
@@ -298,7 +349,10 @@ def _is_safe_url(url, allowed_hosts, require_https=False):
     # urlparse is not so flexible. Treat any url with three slashes as unsafe.
     if url.startswith('///'):
         return False
-    url_info = urlparse(url)
+    try:
+        url_info = _urlparse(url)
+    except ValueError:  # e.g. invalid IPv6 addresses
+        return False
     # Forbid URLs like http:///example.com - with a scheme, but without a hostname.
     # In that URL, example.com is not the hostname but, a path component. However,
     # Chrome will still consider example.com to be the hostname, so we must not
@@ -363,10 +417,21 @@ def limited_parse_qsl(qs, keep_blank_values=False, encoding='utf-8',
                 nv.append('')
             else:
                 continue
-        if len(nv[1]) or keep_blank_values:
+        if nv[1] or keep_blank_values:
             name = nv[0].replace('+', ' ')
             name = unquote(name, encoding=encoding, errors=errors)
             value = nv[1].replace('+', ' ')
             value = unquote(value, encoding=encoding, errors=errors)
             r.append((name, value))
     return r
+
+
+def escape_leading_slashes(url):
+    """
+    If redirecting to an absolute path (two leading slashes), a slash must be
+    escaped to prevent browsers from handling the path as schemaless and
+    redirecting to another host.
+    """
+    if url.startswith('//'):
+        url = '/%2F{}'.format(url[2:])
+    return url

@@ -18,8 +18,8 @@ and spatial operators. GEOS, now an OSGeo project, was initially developed and
 maintained by `Refractions Research`__ of Victoria, Canada.
 
 __ https://trac.osgeo.org/geos/
-__ http://sourceforge.net/projects/jts-topo-suite/
-__ http://www.opengeospatial.org/standards/sfs
+__ https://sourceforge.net/projects/jts-topo-suite/
+__ https://www.opengeospatial.org/standards/sfs
 __ http://www.refractions.net/
 
 Features
@@ -34,8 +34,8 @@ features include:
   may be used outside of a Django project/application.  In other words,
   no need to have ``DJANGO_SETTINGS_MODULE`` set or use a database, etc.
 * Mutability: :class:`GEOSGeometry` objects may be modified.
-* Cross-platform and tested; compatible with Windows, Linux, Solaris, and Mac
-  OS X platforms.
+* Cross-platform and tested; compatible with Windows, Linux, Solaris, and
+  macOS platforms.
 
 .. _geos-tutorial:
 
@@ -173,11 +173,6 @@ Geometries support set-like operators::
         >>> ls3 == ls2  # different SRIDs
         False
 
-    .. versionchanged:: 1.11
-
-        Older versions didn't check the ``srid`` when comparing
-        ``GEOSGeometry`` objects using the equality operator.
-
 Geometry Objects
 ================
 
@@ -194,6 +189,20 @@ This is the base class for all GEOS geometry objects.  It initializes on the
 given ``geo_input`` argument, and then assumes the proper geometry subclass
 (e.g., ``GEOSGeometry('POINT(1 1)')`` will create a :class:`Point` object).
 
+The ``srid`` parameter, if given, is set as the SRID of the created geometry if
+``geo_input`` doesn't have an SRID. If different SRIDs are provided through the
+``geo_input`` and ``srid`` parameters, ``ValueError`` is raised::
+
+    >>> from django.contrib.gis.geos import GEOSGeometry
+    >>> GEOSGeometry('POINT EMPTY', srid=4326).ewkt
+    'SRID=4326;POINT EMPTY'
+    >>> GEOSGeometry('SRID=4326;POINT EMPTY', srid=4326).ewkt
+    'SRID=4326;POINT EMPTY'
+    >>> GEOSGeometry('SRID=1;POINT EMPTY', srid=4326)
+    Traceback (most recent call last):
+    ...
+    ValueError: Input geometry already has SRID: 1.
+
 The following input formats, along with their corresponding Python types,
 are accepted:
 
@@ -203,12 +212,15 @@ Format                   Input Type
 WKT / EWKT               ``str``
 HEX / HEXEWKB            ``str``
 WKB / EWKB               ``buffer``
-GeoJSON                  ``str``
+GeoJSON_                 ``str``
 =======================  ==========
 
-.. classmethod:: GEOSGeometry.from_gml(gml_string)
+For the GeoJSON format, the SRID is set based on the ``crs`` member. If ``crs``
+isn't provided, the SRID defaults to 4326.
 
-    .. versionadded:: 1.11
+.. _GeoJSON: https://tools.ietf.org/html/rfc7946
+
+.. classmethod:: GEOSGeometry.from_gml(gml_string)
 
     Constructs a :class:`GEOSGeometry` from the given GML string.
 
@@ -472,6 +484,14 @@ Topological Methods
     from this geometry is less than or equal to the given ``width``. The
     optional ``quadsegs`` keyword sets the number of segments used to
     approximate a quarter circle (defaults is 8).
+
+.. method:: GEOSGeometry.buffer_with_style(width, quadsegs=8, end_cap_style=1, join_style=1, mitre_limit=5.0)
+
+    Same as :meth:`buffer`, but allows customizing the style of the buffer.
+
+    * ``end_cap_style`` can be round (``1``), flat (``2``), or square (``3``).
+    * ``join_style`` can be round (``1``), mitre (``2``), or bevel (``3``).
+    * Mitre ratio limit (``mitre_limit``) only affects mitered join style.
 
 .. method:: GEOSGeometry.difference(other)
 
@@ -872,7 +892,7 @@ Geometry Factories
 .. function:: fromstr(string, srid=None)
 
     :param string: string that contains spatial data
-    :type string: string
+    :type string: str
     :param srid: spatial reference identifier
     :type srid: int
     :rtype: a :class:`GEOSGeometry` corresponding to the spatial data in the string

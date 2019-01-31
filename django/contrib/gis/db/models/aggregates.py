@@ -1,5 +1,8 @@
-from django.contrib.gis.db.models.fields import ExtentField
+from django.contrib.gis.db.models.fields import (
+    ExtentField, GeometryCollectionField, GeometryField, LineStringField,
+)
 from django.db.models.aggregates import Aggregate
+from django.utils.functional import cached_property
 
 __all__ = ['Collect', 'Extent', 'Extent3D', 'MakeLine', 'Union']
 
@@ -8,20 +11,25 @@ class GeoAggregate(Aggregate):
     function = None
     is_extent = False
 
-    def as_sql(self, compiler, connection):
+    @cached_property
+    def output_field(self):
+        return self.output_field_class(self.source_expressions[0].output_field.srid)
+
+    def as_sql(self, compiler, connection, function=None, **extra_context):
         # this will be called again in parent, but it's needed now - before
         # we get the spatial_aggregate_name
         connection.ops.check_expression_support(self)
-        self.function = connection.ops.spatial_aggregate_name(self.name)
-        return super().as_sql(compiler, connection)
+        return super().as_sql(
+            compiler,
+            connection,
+            function=function or connection.ops.spatial_aggregate_name(self.name),
+            **extra_context
+        )
 
-    def as_oracle(self, compiler, connection):
-        if not hasattr(self, 'tolerance'):
-            self.tolerance = 0.05
-        self.extra['tolerance'] = self.tolerance
-        if not self.is_extent:
-            self.template = '%(function)s(SDOAGGRTYPE(%(expressions)s,%(tolerance)s))'
-        return self.as_sql(compiler, connection)
+    def as_oracle(self, compiler, connection, **extra_context):
+        tolerance = self.extra.get('tolerance') or getattr(self, 'tolerance', 0.05)
+        template = None if self.is_extent else '%(function)s(SDOAGGRTYPE(%(expressions)s,%(tolerance)s))'
+        return self.as_sql(compiler, connection, template=template, tolerance=tolerance, **extra_context)
 
     def resolve_expression(self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False):
         c = super().resolve_expression(query, allow_joins, reuse, summarize, for_save)
@@ -33,6 +41,7 @@ class GeoAggregate(Aggregate):
 
 class Collect(GeoAggregate):
     name = 'Collect'
+    output_field_class = GeometryCollectionField
 
 
 class Extent(GeoAggregate):
@@ -42,7 +51,7 @@ class Extent(GeoAggregate):
     def __init__(self, expression, **extra):
         super().__init__(expression, output_field=ExtentField(), **extra)
 
-    def convert_value(self, value, expression, connection, context):
+    def convert_value(self, value, expression, connection):
         return connection.ops.convert_extent(value)
 
 
@@ -53,13 +62,15 @@ class Extent3D(GeoAggregate):
     def __init__(self, expression, **extra):
         super().__init__(expression, output_field=ExtentField(), **extra)
 
-    def convert_value(self, value, expression, connection, context):
+    def convert_value(self, value, expression, connection):
         return connection.ops.convert_extent3d(value)
 
 
 class MakeLine(GeoAggregate):
     name = 'MakeLine'
+    output_field_class = LineStringField
 
 
 class Union(GeoAggregate):
     name = 'Union'
+    output_field_class = GeometryField
