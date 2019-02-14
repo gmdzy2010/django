@@ -39,24 +39,13 @@ SYSTEM_CHECK_MSG = 'System check identified no issues'
 
 
 class AdminScriptTestCase(SimpleTestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.test_dir = os.path.realpath(os.path.join(
-            tempfile.gettempdir(),
-            cls.__name__,
-            'test_project',
-        ))
-        if not os.path.exists(cls.test_dir):
-            os.makedirs(cls.test_dir)
-        with open(os.path.join(cls.test_dir, '__init__.py'), 'w'):
+    def setUp(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        self.test_dir = os.path.join(tmpdir.name, 'test_project')
+        os.mkdir(self.test_dir)
+        with open(os.path.join(self.test_dir, '__init__.py'), 'w'):
             pass
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.test_dir)
-        super().tearDownClass()
 
     def write_settings(self, filename, apps=None, is_dir=False, sdict=None, extra=None):
         if is_dir:
@@ -91,19 +80,6 @@ class AdminScriptTestCase(SimpleTestCase):
                 for k, v in sdict.items():
                     settings_file.write("%s = %s\n" % (k, v))
 
-    def remove_settings(self, filename, is_dir=False):
-        full_name = os.path.join(self.test_dir, filename)
-        if is_dir:
-            shutil.rmtree(full_name)
-        else:
-            os.remove(full_name)
-
-        # Also remove a __pycache__ directory, if it exists; it could
-        # mess up later tests that depend upon the .py file not existing
-        cache_name = os.path.join(self.test_dir, '__pycache__')
-        if os.path.isdir(cache_name):
-            shutil.rmtree(cache_name)
-
     def _ext_backend_paths(self):
         """
         Returns the paths for any external backend packages.
@@ -129,7 +105,6 @@ class AdminScriptTestCase(SimpleTestCase):
 
         # Define a temporary environment for the subprocess
         test_environ = os.environ.copy()
-        old_cwd = os.getcwd()
 
         # Set the test environment
         if settings_file:
@@ -141,29 +116,18 @@ class AdminScriptTestCase(SimpleTestCase):
         test_environ['PYTHONPATH'] = os.pathsep.join(python_path)
         test_environ['PYTHONWARNINGS'] = ''
 
-        # Move to the test directory and run
-        os.chdir(self.test_dir)
-        out, err = subprocess.Popen(
+        return subprocess.Popen(
             [sys.executable, script] + args,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=self.test_dir,
             env=test_environ, universal_newlines=True,
         ).communicate()
-        # Move back to the old working directory
-        os.chdir(old_cwd)
-
-        return out, err
 
     def run_django_admin(self, args, settings_file=None):
         script_dir = os.path.abspath(os.path.join(os.path.dirname(django.__file__), 'bin'))
         return self.run_test(os.path.join(script_dir, 'django-admin.py'), args, settings_file)
 
     def run_manage(self, args, settings_file=None, configured_settings=False):
-        def safe_remove(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
         template_manage_py = (
             os.path.join(os.path.dirname(__file__), 'configured_settings_manage.py')
             if configured_settings else
@@ -178,7 +142,6 @@ class AdminScriptTestCase(SimpleTestCase):
             "{{ project_name }}", "test_project")
         with open(test_manage_py, 'w') as fp:
             fp.write(manage_py_contents)
-        self.addCleanup(safe_remove, test_manage_py)
 
         return self.run_test('./manage.py', args, settings_file)
 
@@ -247,10 +210,8 @@ class DjangoAdminDefaultSettings(AdminScriptTestCase):
     contains the test application.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "default: django-admin builtin commands fail with an error when no settings provided"
@@ -315,11 +276,9 @@ class DjangoAdminFullPathDefaultSettings(AdminScriptTestCase):
     contains the test application specified using a full path.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', ['django.contrib.auth', 'django.contrib.contenttypes',
                                             'admin_scripts', 'admin_scripts.complex_app'])
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "fulldefault: django-admin builtin commands fail with an error when no settings provided"
@@ -384,10 +343,8 @@ class DjangoAdminMinimalSettings(AdminScriptTestCase):
     doesn't contain the test application.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', apps=['django.contrib.auth', 'django.contrib.contenttypes'])
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "minimal: django-admin builtin commands fail with an error when no settings provided"
@@ -452,10 +409,8 @@ class DjangoAdminAlternateSettings(AdminScriptTestCase):
     with a name other than 'settings.py'.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('alternate_settings.py')
-
-    def tearDown(self):
-        self.remove_settings('alternate_settings.py')
 
     def test_builtin_command(self):
         "alternate: django-admin builtin commands fail with an error when no settings provided"
@@ -522,12 +477,9 @@ class DjangoAdminMultipleSettings(AdminScriptTestCase):
     alternate settings must be used by the running script.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', apps=['django.contrib.auth', 'django.contrib.contenttypes'])
         self.write_settings('alternate_settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
-        self.remove_settings('alternate_settings.py')
 
     def test_builtin_command(self):
         "alternate: django-admin builtin commands fail with an error when no settings provided"
@@ -593,17 +545,14 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self.write_settings('settings', is_dir=True)
-
-    def tearDown(self):
-        self.remove_settings('settings', is_dir=True)
 
     def test_setup_environ(self):
         "directory: startapp creates the correct directory"
         args = ['startapp', 'settings_test']
         app_path = os.path.join(self.test_dir, 'settings_test')
         out, err = self.run_django_admin(args, 'test_project.settings')
-        self.addCleanup(shutil.rmtree, app_path)
         self.assertNoOutput(err)
         self.assertTrue(os.path.exists(app_path))
         with open(os.path.join(app_path, 'apps.py')) as f:
@@ -617,7 +566,6 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
         args = ['startapp', '--template', template_path, 'custom_settings_test']
         app_path = os.path.join(self.test_dir, 'custom_settings_test')
         out, err = self.run_django_admin(args, 'test_project.settings')
-        self.addCleanup(shutil.rmtree, app_path)
         self.assertNoOutput(err)
         self.assertTrue(os.path.exists(app_path))
         self.assertTrue(os.path.exists(os.path.join(app_path, 'api.py')))
@@ -627,7 +575,6 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
         args = ['startapp', 'こんにちは']
         app_path = os.path.join(self.test_dir, 'こんにちは')
         out, err = self.run_django_admin(args, 'test_project.settings')
-        self.addCleanup(shutil.rmtree, app_path)
         self.assertNoOutput(err)
         self.assertTrue(os.path.exists(app_path))
         with open(os.path.join(app_path, 'apps.py'), encoding='utf8') as f:
@@ -714,10 +661,8 @@ class ManageDefaultSettings(AdminScriptTestCase):
     contains the test application.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "default: manage.py builtin commands succeed when default settings are appropriate"
@@ -781,10 +726,8 @@ class ManageFullPathDefaultSettings(AdminScriptTestCase):
     contains the test application specified using a full path.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', ['django.contrib.auth', 'django.contrib.contenttypes', 'admin_scripts'])
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "fulldefault: manage.py builtin commands succeed when default settings are appropriate"
@@ -848,10 +791,8 @@ class ManageMinimalSettings(AdminScriptTestCase):
     doesn't contain the test application.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', apps=['django.contrib.auth', 'django.contrib.contenttypes'])
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_builtin_command(self):
         "minimal: manage.py builtin commands fail with an error when no settings provided"
@@ -915,10 +856,8 @@ class ManageAlternateSettings(AdminScriptTestCase):
     with a name other than 'settings.py'.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('alternate_settings.py')
-
-    def tearDown(self):
-        self.remove_settings('alternate_settings.py')
 
     def test_builtin_command(self):
         "alternate: manage.py builtin commands fail with an error when no default settings provided"
@@ -1006,12 +945,9 @@ class ManageMultipleSettings(AdminScriptTestCase):
     alternate settings must be used by the running script.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', apps=['django.contrib.auth', 'django.contrib.contenttypes'])
         self.write_settings('alternate_settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
-        self.remove_settings('alternate_settings.py')
 
     def test_builtin_command(self):
         "multiple: manage.py builtin commands fail with an error when no settings provided"
@@ -1075,9 +1011,6 @@ class ManageSettingsWithSettingsErrors(AdminScriptTestCase):
     Tests for manage.py when using the default settings.py file containing
     runtime errors.
     """
-    def tearDown(self):
-        self.remove_settings('settings.py')
-
     def write_settings_with_import_error(self, filename):
         settings_file_path = os.path.join(self.test_dir, filename)
         with open(settings_file_path, 'w') as settings_file:
@@ -1131,9 +1064,6 @@ class ManageSettingsWithSettingsErrors(AdminScriptTestCase):
 
 
 class ManageCheck(AdminScriptTestCase):
-    def tearDown(self):
-        self.remove_settings('settings.py')
-
     def test_nonexistent_app(self):
         """check reports an error on a nonexistent app in INSTALLED_APPS."""
         self.write_settings(
@@ -1281,7 +1211,7 @@ class ManageCheck(AdminScriptTestCase):
         self.assertNoOutput(out)
 
 
-class ManageRunserver(AdminScriptTestCase):
+class ManageRunserver(SimpleTestCase):
     def setUp(self):
         def monkey_run(*args, **options):
             return
@@ -1399,13 +1329,11 @@ class ManageRunserverMigrationWarning(TestCase):
 
 class ManageRunserverEmptyAllowedHosts(AdminScriptTestCase):
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', sdict={
             'ALLOWED_HOSTS': [],
             'DEBUG': False,
         })
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_empty_allowed_hosts_error(self):
         out, err = self.run_manage(['runserver'])
@@ -1413,7 +1341,7 @@ class ManageRunserverEmptyAllowedHosts(AdminScriptTestCase):
         self.assertOutput(err, 'CommandError: You must set settings.ALLOWED_HOSTS if DEBUG is False.')
 
 
-class ManageTestserver(AdminScriptTestCase):
+class ManageTestserver(SimpleTestCase):
 
     @mock.patch.object(TestserverCommand, 'handle', return_value='')
     def test_testserver_handle_params(self, mock_handle):
@@ -1469,10 +1397,8 @@ class ColorCommand(BaseCommand):
 class CommandTypes(AdminScriptTestCase):
     "Tests for the various types of base command types that can be defined."
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_version(self):
         "version is handled as a special case"
@@ -1890,12 +1816,9 @@ class ArgumentOrder(AdminScriptTestCase):
     individual command.
     """
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py', apps=['django.contrib.auth', 'django.contrib.contenttypes'])
         self.write_settings('alternate_settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
-        self.remove_settings('alternate_settings.py')
 
     def test_setting_then_option(self):
         """ Options passed after settings are correctly handled. """
@@ -1957,7 +1880,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         "Make sure the startproject management command creates a project"
         args = ['startproject', 'testproject']
         testproject_dir = os.path.join(self.test_dir, 'testproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -1971,17 +1893,17 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
     def test_invalid_project_name(self):
         "Make sure the startproject management command validates a project name"
         for bad_name in ('7testproject', '../testproject'):
-            args = ['startproject', bad_name]
-            testproject_dir = os.path.join(self.test_dir, bad_name)
-            self.addCleanup(shutil.rmtree, testproject_dir, True)
+            with self.subTest(project_name=bad_name):
+                args = ['startproject', bad_name]
+                testproject_dir = os.path.join(self.test_dir, bad_name)
 
-            out, err = self.run_django_admin(args)
-            self.assertOutput(
-                err,
-                "Error: '%s' is not a valid project name. Please make "
-                "sure the name is a valid identifier." % bad_name
-            )
-            self.assertFalse(os.path.exists(testproject_dir))
+                out, err = self.run_django_admin(args)
+                self.assertOutput(
+                    err,
+                    "Error: '%s' is not a valid project name. Please make "
+                    "sure the name is a valid identifier." % bad_name
+                )
+                self.assertFalse(os.path.exists(testproject_dir))
 
     def test_importable_project_name(self):
         """
@@ -1991,7 +1913,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         bad_name = 'os'
         args = ['startproject', bad_name]
         testproject_dir = os.path.join(self.test_dir, bad_name)
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertOutput(
@@ -2007,7 +1928,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         args = ['startproject', 'testproject', 'othertestproject']
         testproject_dir = os.path.join(self.test_dir, 'othertestproject')
         os.mkdir(testproject_dir)
-        self.addCleanup(shutil.rmtree, testproject_dir)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2023,7 +1943,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         template_path = os.path.join(custom_templates_dir, 'project_template')
         args = ['startproject', '--template', template_path, 'customtestproject']
         testproject_dir = os.path.join(self.test_dir, 'customtestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2035,7 +1954,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         template_path = os.path.join(custom_templates_dir, 'project_template' + os.sep)
         args = ['startproject', '--template', template_path, 'customtestproject']
         testproject_dir = os.path.join(self.test_dir, 'customtestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2047,7 +1965,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         template_path = os.path.join(custom_templates_dir, 'project_template.tgz')
         args = ['startproject', '--template', template_path, 'tarballtestproject']
         testproject_dir = os.path.join(self.test_dir, 'tarballtestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2060,7 +1977,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         args = ['startproject', '--template', template_path, 'tarballtestproject', 'altlocation']
         testproject_dir = os.path.join(self.test_dir, 'altlocation')
         os.mkdir(testproject_dir)
-        self.addCleanup(shutil.rmtree, testproject_dir)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2076,7 +1992,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
 
         args = ['startproject', '--template', template_url, 'urltestproject']
         testproject_dir = os.path.join(self.test_dir, 'urltestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2089,7 +2004,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
 
         args = ['startproject', '--template', template_url, 'urltestproject']
         testproject_dir = os.path.join(self.test_dir, 'urltestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2101,7 +2015,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         template_path = os.path.join(custom_templates_dir, 'project_template')
         args = ['startproject', '--template', template_path, 'customtestproject', '-e', 'txt', '-n', 'Procfile']
         testproject_dir = os.path.join(self.test_dir, 'customtestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2119,7 +2032,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         args = ['startproject', '--template', template_path, 'another_project', 'project_dir']
         testproject_dir = os.path.join(self.test_dir, 'project_dir')
         os.mkdir(testproject_dir)
-        self.addCleanup(shutil.rmtree, testproject_dir)
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
         test_manage_py = os.path.join(testproject_dir, 'manage.py')
@@ -2132,7 +2044,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         "Make sure template context variables are not html escaped"
         # We're using a custom command so we need the alternate settings
         self.write_settings('alternate_settings.py')
-        self.addCleanup(self.remove_settings, 'alternate_settings.py')
         template_path = os.path.join(custom_templates_dir, 'project_template')
         args = [
             'custom_startproject', '--template', template_path,
@@ -2141,7 +2052,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         ]
         testproject_dir = os.path.join(self.test_dir, 'project_dir')
         os.mkdir(testproject_dir)
-        self.addCleanup(shutil.rmtree, testproject_dir)
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
         test_manage_py = os.path.join(testproject_dir, 'additional_dir', 'extra.py')
@@ -2170,7 +2080,6 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         template_path = os.path.join(custom_templates_dir, 'project_template')
         args = ['startproject', '--template', template_path, '--extension=txt', 'customtestproject']
         testproject_dir = os.path.join(self.test_dir, 'customtestproject')
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
@@ -2187,17 +2096,17 @@ class StartApp(AdminScriptTestCase):
     def test_invalid_name(self):
         """startapp validates that app name is a valid Python identifier."""
         for bad_name in ('7testproject', '../testproject'):
-            args = ['startapp', bad_name]
-            testproject_dir = os.path.join(self.test_dir, bad_name)
-            self.addCleanup(shutil.rmtree, testproject_dir, True)
+            with self.subTest(app_name=bad_name):
+                args = ['startapp', bad_name]
+                testproject_dir = os.path.join(self.test_dir, bad_name)
 
-            out, err = self.run_django_admin(args)
-            self.assertOutput(
-                err,
-                "CommandError: '{}' is not a valid app name. Please make "
-                "sure the name is a valid identifier.".format(bad_name)
-            )
-            self.assertFalse(os.path.exists(testproject_dir))
+                out, err = self.run_django_admin(args)
+                self.assertOutput(
+                    err,
+                    "CommandError: '{}' is not a valid app name. Please make "
+                    "sure the name is a valid identifier.".format(bad_name)
+                )
+                self.assertFalse(os.path.exists(testproject_dir))
 
     def test_importable_name(self):
         """
@@ -2207,7 +2116,6 @@ class StartApp(AdminScriptTestCase):
         bad_name = 'os'
         args = ['startapp', bad_name]
         testproject_dir = os.path.join(self.test_dir, bad_name)
-        self.addCleanup(shutil.rmtree, testproject_dir, True)
 
         out, err = self.run_django_admin(args)
         self.assertOutput(
@@ -2225,7 +2133,6 @@ class DiffSettings(AdminScriptTestCase):
     def test_basic(self):
         """Runs without error and emits settings diff."""
         self.write_settings('settings_to_diff.py', sdict={'FOO': '"bar"'})
-        self.addCleanup(self.remove_settings, 'settings_to_diff.py')
         args = ['diffsettings', '--settings=settings_to_diff']
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
@@ -2239,7 +2146,6 @@ class DiffSettings(AdminScriptTestCase):
     def test_all(self):
         """The all option also shows settings with the default value."""
         self.write_settings('settings_to_diff.py', sdict={'STATIC_URL': 'None'})
-        self.addCleanup(self.remove_settings, 'settings_to_diff.py')
         args = ['diffsettings', '--settings=settings_to_diff', '--all']
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
@@ -2251,9 +2157,7 @@ class DiffSettings(AdminScriptTestCase):
         comparison.
         """
         self.write_settings('settings_default.py', sdict={'FOO': '"foo"', 'BAR': '"bar1"'})
-        self.addCleanup(self.remove_settings, 'settings_default.py')
         self.write_settings('settings_to_diff.py', sdict={'FOO': '"foo"', 'BAR': '"bar2"'})
-        self.addCleanup(self.remove_settings, 'settings_to_diff.py')
         out, err = self.run_manage(['diffsettings', '--settings=settings_to_diff', '--default=settings_default'])
         self.assertNoOutput(err)
         self.assertNotInOutput(out, "FOO")
@@ -2262,7 +2166,6 @@ class DiffSettings(AdminScriptTestCase):
     def test_unified(self):
         """--output=unified emits settings diff in unified mode."""
         self.write_settings('settings_to_diff.py', sdict={'FOO': '"bar"'})
-        self.addCleanup(self.remove_settings, 'settings_to_diff.py')
         args = ['diffsettings', '--settings=settings_to_diff', '--output=unified']
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
@@ -2277,7 +2180,6 @@ class DiffSettings(AdminScriptTestCase):
         settings with the default value.
         """
         self.write_settings('settings_to_diff.py', sdict={'FOO': '"bar"'})
-        self.addCleanup(self.remove_settings, 'settings_to_diff.py')
         args = ['diffsettings', '--settings=settings_to_diff', '--output=unified', '--all']
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
@@ -2290,10 +2192,8 @@ class Dumpdata(AdminScriptTestCase):
     """Tests for dumpdata management command."""
 
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_pks_parsing(self):
         """Regression for #20509
@@ -2321,10 +2221,8 @@ class MainModule(AdminScriptTestCase):
 
 class DjangoAdminSuggestions(AdminScriptTestCase):
     def setUp(self):
+        super().setUp()
         self.write_settings('settings.py')
-
-    def tearDown(self):
-        self.remove_settings('settings.py')
 
     def test_suggestions(self):
         args = ['rnserver', '--settings=test_project.settings']
