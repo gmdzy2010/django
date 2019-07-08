@@ -269,7 +269,7 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
         form_field = db_field.formfield(**kwargs)
         if (isinstance(form_field.widget, SelectMultiple) and
                 not isinstance(form_field.widget, (CheckboxSelectMultiple, AutocompleteSelectMultiple))):
-            msg = _('Hold down "Control", or "Command" on a Mac, to select more than one.')
+            msg = _('Hold down “Control”, or “Command” on a Mac, to select more than one.')
             help_text = form_field.help_text
             form_field.help_text = format_lazy('{} {}', help_text, msg) if help_text else msg
         return form_field
@@ -326,6 +326,10 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
         if self.fieldsets:
             return self.fieldsets
         return [(None, {'fields': self.get_fields(request, obj)})]
+
+    def get_inlines(self, request, obj):
+        """Hook for specifying custom inlines."""
+        return self.inlines
 
     def get_ordering(self, request):
         """
@@ -582,7 +586,7 @@ class ModelAdmin(BaseModelAdmin):
 
     def get_inline_instances(self, request, obj=None):
         inline_instances = []
-        for inline_class in self.inlines:
+        for inline_class in self.get_inlines(request, obj):
             inline = inline_class(self.model, self.admin_site)
             if request:
                 if not (inline.has_view_or_change_permission(request, obj) or
@@ -606,7 +610,7 @@ class ModelAdmin(BaseModelAdmin):
 
         info = self.model._meta.app_label, self.model._meta.model_name
 
-        urlpatterns = [
+        return [
             path('', wrap(self.changelist_view), name='%s_%s_changelist' % info),
             path('add/', wrap(self.add_view), name='%s_%s_add' % info),
             path('autocomplete/', wrap(self.autocomplete_view), name='%s_%s_autocomplete' % info),
@@ -618,7 +622,6 @@ class ModelAdmin(BaseModelAdmin):
                 pattern_name='%s:%s_%s_change' % ((self.admin_site.name,) + info)
             ))),
         ]
-        return urlpatterns
 
     @property
     def urls(self):
@@ -1125,7 +1128,7 @@ class ModelAdmin(BaseModelAdmin):
             'has_delete_permission': self.has_delete_permission(request, obj),
             'has_editable_inline_admin_formsets': has_editable_inline_admin_formsets,
             'has_file_field': context['adminform'].form.is_multipart() or any(
-                admin_formset.formset.form().is_multipart()
+                admin_formset.formset.is_multipart()
                 for admin_formset in context['inline_admin_formsets']
             ),
             'has_absolute_url': view_on_site_url is not None,
@@ -1199,7 +1202,7 @@ class ModelAdmin(BaseModelAdmin):
                 "_saveasnew" in request.POST and self.save_as_continue and
                 self.has_change_permission(request, obj)
         ):
-            msg = _('The {name} "{obj}" was added successfully.')
+            msg = _('The {name} “{obj}” was added successfully.')
             if self.has_change_permission(request, obj):
                 msg += ' ' + _('You may edit it again below.')
             self.message_user(request, format_html(msg, **msg_dict), messages.SUCCESS)
@@ -1213,7 +1216,7 @@ class ModelAdmin(BaseModelAdmin):
 
         elif "_addanother" in request.POST:
             msg = format_html(
-                _('The {name} "{obj}" was added successfully. You may add another {name} below.'),
+                _('The {name} “{obj}” was added successfully. You may add another {name} below.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1223,7 +1226,7 @@ class ModelAdmin(BaseModelAdmin):
 
         else:
             msg = format_html(
-                _('The {name} "{obj}" was added successfully.'),
+                _('The {name} “{obj}” was added successfully.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1263,7 +1266,7 @@ class ModelAdmin(BaseModelAdmin):
         }
         if "_continue" in request.POST:
             msg = format_html(
-                _('The {name} "{obj}" was changed successfully. You may edit it again below.'),
+                _('The {name} “{obj}” was changed successfully. You may edit it again below.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1273,7 +1276,7 @@ class ModelAdmin(BaseModelAdmin):
 
         elif "_saveasnew" in request.POST:
             msg = format_html(
-                _('The {name} "{obj}" was added successfully. You may edit it again below.'),
+                _('The {name} “{obj}” was added successfully. You may edit it again below.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1286,7 +1289,7 @@ class ModelAdmin(BaseModelAdmin):
 
         elif "_addanother" in request.POST:
             msg = format_html(
-                _('The {name} "{obj}" was changed successfully. You may add another {name} below.'),
+                _('The {name} “{obj}” was changed successfully. You may add another {name} below.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1298,7 +1301,7 @@ class ModelAdmin(BaseModelAdmin):
 
         else:
             msg = format_html(
-                _('The {name} "{obj}" was changed successfully.'),
+                _('The {name} “{obj}” was changed successfully.'),
                 **msg_dict
             )
             self.message_user(request, msg, messages.SUCCESS)
@@ -1419,7 +1422,7 @@ class ModelAdmin(BaseModelAdmin):
 
         self.message_user(
             request,
-            _('The %(name)s "%(obj)s" was deleted successfully.') % {
+            _('The %(name)s “%(obj)s” was deleted successfully.') % {
                 'name': opts.verbose_name,
                 'obj': obj_display,
             },
@@ -1498,7 +1501,7 @@ class ModelAdmin(BaseModelAdmin):
         Create a message informing the user that the object doesn't exist
         and return a redirect to the admin index page.
         """
-        msg = _("""%(name)s with ID "%(key)s" doesn't exist. Perhaps it was deleted?""") % {
+        msg = _('%(name)s with ID “%(key)s” doesn’t exist. Perhaps it was deleted?') % {
             'name': opts.verbose_name,
             'key': unquote(object_id),
         }
@@ -2111,46 +2114,50 @@ class InlineModelAdmin(BaseModelAdmin):
             queryset = queryset.none()
         return queryset
 
+    def _has_any_perms_for_target_model(self, request, perms):
+        """
+        This method is called only when the ModelAdmin's model is for an
+        ManyToManyField's implicit through model (if self.opts.auto_created).
+        Return True if the user has any of the given permissions ('add',
+        'change', etc.) for the model that points to the through model.
+        """
+        opts = self.opts
+        # Find the target model of an auto-created many-to-many relationship.
+        for field in opts.fields:
+            if field.remote_field and field.remote_field.model != self.parent_model:
+                opts = field.remote_field.model._meta
+                break
+        return any(
+            request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename(perm, opts)))
+            for perm in perms
+        )
+
     def has_add_permission(self, request, obj):
         if self.opts.auto_created:
-            # We're checking the rights to an auto-created intermediate model,
-            # which doesn't have its own individual permissions. The user needs
-            # to have the view permission for the related model in order to
-            # be able to do anything with the intermediate model.
-            return self.has_view_permission(request, obj)
+            # Auto-created intermediate models don't have their own
+            # permissions. The user needs to have the change permission for the
+            # related model in order to be able to do anything with the
+            # intermediate model.
+            return self._has_any_perms_for_target_model(request, ['change'])
         return super().has_add_permission(request)
 
     def has_change_permission(self, request, obj=None):
         if self.opts.auto_created:
-            # We're checking the rights to an auto-created intermediate model,
-            # which doesn't have its own individual permissions. The user needs
-            # to have the view permission for the related model in order to
-            # be able to do anything with the intermediate model.
-            return self.has_view_permission(request, obj)
+            # Same comment as has_add_permission().
+            return self._has_any_perms_for_target_model(request, ['change'])
         return super().has_change_permission(request)
 
     def has_delete_permission(self, request, obj=None):
         if self.opts.auto_created:
-            # We're checking the rights to an auto-created intermediate model,
-            # which doesn't have its own individual permissions. The user needs
-            # to have the view permission for the related model in order to
-            # be able to do anything with the intermediate model.
-            return self.has_view_permission(request, obj)
+            # Same comment as has_add_permission().
+            return self._has_any_perms_for_target_model(request, ['change'])
         return super().has_delete_permission(request, obj)
 
     def has_view_permission(self, request, obj=None):
         if self.opts.auto_created:
-            opts = self.opts
-            # The model was auto-created as intermediary for a many-to-many
-            # Many-relationship; find the target model.
-            for field in opts.fields:
-                if field.remote_field and field.remote_field.model != self.parent_model:
-                    opts = field.remote_field.model._meta
-                    break
-            return (
-                request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename('view', opts))) or
-                request.user.has_perm('%s.%s' % (opts.app_label, get_permission_codename('change', opts)))
-            )
+            # Same comment as has_add_permission(). The 'change' permission
+            # also implies the 'view' permission.
+            return self._has_any_perms_for_target_model(request, ['view', 'change'])
         return super().has_view_permission(request)
 
 

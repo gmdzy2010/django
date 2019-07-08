@@ -54,11 +54,12 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
     def unsupported_functions(self):
         unsupported = {
             'AsGML', 'AsKML', 'AsSVG', 'Azimuth', 'BoundingCircle',
-            'ForcePolygonCW', 'LineLocatePoint', 'MakeValid', 'MemSize',
-            'Perimeter', 'PointOnSurface', 'Reverse', 'Scale', 'SnapToGrid',
-            'Transform', 'Translate',
+            'ForcePolygonCW', 'GeometryDistance', 'LineLocatePoint',
+            'MakeValid', 'MemSize', 'Perimeter', 'PointOnSurface', 'Reverse',
+            'Scale', 'SnapToGrid', 'Transform', 'Translate',
         }
         if self.connection.mysql_is_mariadb:
+            unsupported.remove('PointOnSurface')
             unsupported.update({'GeoHash', 'IsValid'})
             if self.connection.mysql_version < (10, 2, 4):
                 unsupported.add('AsGeoJSON')

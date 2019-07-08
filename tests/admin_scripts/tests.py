@@ -42,7 +42,9 @@ class AdminScriptTestCase(SimpleTestCase):
     def setUp(self):
         tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(tmpdir.cleanup)
-        self.test_dir = os.path.join(tmpdir.name, 'test_project')
+        # os.path.realpath() is required for temporary directories on macOS,
+        # where `/var` is a symlink to `/private/var`.
+        self.test_dir = os.path.realpath(os.path.join(tmpdir.name, 'test_project'))
         os.mkdir(self.test_dir)
         with open(os.path.join(self.test_dir, '__init__.py'), 'w'):
             pass
@@ -127,10 +129,10 @@ class AdminScriptTestCase(SimpleTestCase):
         script_dir = os.path.abspath(os.path.join(os.path.dirname(django.__file__), 'bin'))
         return self.run_test(os.path.join(script_dir, 'django-admin.py'), args, settings_file)
 
-    def run_manage(self, args, settings_file=None, configured_settings=False):
+    def run_manage(self, args, settings_file=None, manage_py=None):
         template_manage_py = (
-            os.path.join(os.path.dirname(__file__), 'configured_settings_manage.py')
-            if configured_settings else
+            os.path.join(os.path.dirname(__file__), manage_py)
+            if manage_py else
             os.path.join(os.path.dirname(conf.__file__), 'project_template', 'manage.py-tpl')
         )
         test_manage_py = os.path.join(self.test_dir, 'manage.py')
@@ -1101,13 +1103,13 @@ class ManageCheck(AdminScriptTestCase):
                 'django.contrib.auth',
                 'django.contrib.contenttypes',
                 'django.contrib.messages',
-                'django.contrib.sessions',
             ],
             sdict={
                 'DEBUG': True,
                 'MIDDLEWARE': [
                     'django.contrib.messages.middleware.MessageMiddleware',
                     'django.contrib.auth.middleware.AuthenticationMiddleware',
+                    'django.contrib.sessions.middleware.SessionMiddleware',
                 ],
                 'TEMPLATES': [
                     {
@@ -1936,7 +1938,11 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
         # running again..
         out, err = self.run_django_admin(args)
         self.assertNoOutput(out)
-        self.assertOutput(err, "already exists")
+        self.assertOutput(
+            err,
+            "already exists. Overlaying a project into an existing directory "
+            "won't replace conflicting files."
+        )
 
     def test_custom_project_template(self):
         "Make sure the startproject management command is able to use a different project template"
@@ -2126,6 +2132,34 @@ class StartApp(AdminScriptTestCase):
         )
         self.assertFalse(os.path.exists(testproject_dir))
 
+    def test_invalid_target_name(self):
+        for bad_target in ('invalid.dir_name', '7invalid_dir_name', '.invalid_dir_name'):
+            with self.subTest(bad_target):
+                _, err = self.run_django_admin(['startapp', 'app', bad_target])
+                self.assertOutput(
+                    err,
+                    "CommandError: '%s' is not a valid app directory. Please "
+                    "make sure the directory is a valid identifier." % bad_target
+                )
+
+    def test_importable_target_name(self):
+        _, err = self.run_django_admin(['startapp', 'app', 'os'])
+        self.assertOutput(
+            err,
+            "CommandError: 'os' conflicts with the name of an existing Python "
+            "module and cannot be used as an app directory. Please try "
+            "another directory."
+        )
+
+    def test_overlaying_app(self):
+        self.run_django_admin(['startapp', 'app1'])
+        out, err = self.run_django_admin(['startapp', 'app2', 'app1'])
+        self.assertOutput(
+            err,
+            "already exists. Overlaying an app into an existing directory "
+            "won't replace conflicting files."
+        )
+
 
 class DiffSettings(AdminScriptTestCase):
     """Tests for diffsettings management command."""
@@ -2137,11 +2171,21 @@ class DiffSettings(AdminScriptTestCase):
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
         self.assertOutput(out, "FOO = 'bar'  ###")
+        # Attributes from django.conf.Settings don't appear.
+        self.assertNotInOutput(out, 'is_overridden = ')
 
     def test_settings_configured(self):
-        out, err = self.run_manage(['diffsettings'], configured_settings=True)
+        out, err = self.run_manage(['diffsettings'], manage_py='configured_settings_manage.py')
         self.assertNoOutput(err)
         self.assertOutput(out, 'CUSTOM = 1  ###\nDEBUG = True')
+        # Attributes from django.conf.UserSettingsHolder don't appear.
+        self.assertNotInOutput(out, 'default_settings = ')
+
+    def test_dynamic_settings_configured(self):
+        # Custom default settings appear.
+        out, err = self.run_manage(['diffsettings'], manage_py='configured_dynamic_settings_manage.py')
+        self.assertNoOutput(err)
+        self.assertOutput(out, "FOO = 'bar'  ###")
 
     def test_all(self):
         """The all option also shows settings with the default value."""

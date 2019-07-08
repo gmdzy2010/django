@@ -104,7 +104,7 @@ class ArticleAdmin(admin.ModelAdmin):
     list_display = (
         'content', 'date', callable_year, 'model_year', 'modeladmin_year',
         'model_year_reversed', 'section', lambda obj: obj.title,
-        'order_by_expression',
+        'order_by_expression', 'model_property_year', 'model_month',
     )
     list_editable = ('section',)
     list_filter = ('date', 'section')
@@ -893,8 +893,27 @@ class CityInlineAdmin(admin.TabularInline):
     view_on_site = False
 
 
+class StateAdminForm(forms.ModelForm):
+    nolabel_form_field = forms.BooleanField(required=False)
+
+    class Meta:
+        model = State
+        fields = '__all__'
+        labels = {'name': 'State name (from form’s Meta.labels)'}
+
+    @property
+    def changed_data(self):
+        data = super().changed_data
+        if data:
+            # Add arbitrary name to changed_data to test
+            # change message construction.
+            return data + ['not_a_form_field']
+        return data
+
+
 class StateAdmin(admin.ModelAdmin):
     inlines = [CityInlineAdmin]
+    form = StateAdminForm
 
 
 class RestaurantInlineAdmin(admin.TabularInline):

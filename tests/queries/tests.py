@@ -1,5 +1,6 @@
 import datetime
 import pickle
+import sys
 import unittest
 from operator import attrgetter
 
@@ -15,18 +16,19 @@ from .models import (
     FK1, Annotation, Article, Author, BaseA, Book, CategoryItem,
     CategoryRelationship, Celebrity, Channel, Chapter, Child, ChildObjectA,
     Classroom, CommonMixedCaseForeignKeys, Company, Cover, CustomPk,
-    CustomPkTag, Detail, DumbCategory, Eaten, Employment, ExtraInfo, Fan, Food,
-    Identifier, Individual, Item, Job, JobResponsibilities, Join, LeafA, LeafB,
-    LoopX, LoopZ, ManagedModel, Member, MixedCaseDbColumnCategoryItem,
-    MixedCaseFieldCategoryItem, ModelA, ModelB, ModelC, ModelD, MyObject,
-    NamedCategory, Node, Note, NullableName, Number, ObjectA, ObjectB, ObjectC,
-    OneToOneCategory, Order, OrderItem, Page, Paragraph, Person, Plaything,
-    PointerA, Program, ProxyCategory, ProxyObjectA, ProxyObjectB, Ranking,
-    Related, RelatedIndividual, RelatedObject, Report, ReportComment,
-    ReservedName, Responsibility, School, SharedConnection, SimpleCategory,
-    SingleObject, SpecialCategory, Staff, StaffUser, Student, Tag, Task,
-    Teacher, Ticket21203Child, Ticket21203Parent, Ticket23605A, Ticket23605B,
-    Ticket23605C, TvChef, Valid, X,
+    CustomPkTag, DateTimePK, Detail, DumbCategory, Eaten, Employment,
+    ExtraInfo, Fan, Food, Identifier, Individual, Item, Job,
+    JobResponsibilities, Join, LeafA, LeafB, LoopX, LoopZ, ManagedModel,
+    Member, MixedCaseDbColumnCategoryItem, MixedCaseFieldCategoryItem, ModelA,
+    ModelB, ModelC, ModelD, MyObject, NamedCategory, Node, Note, NullableName,
+    Number, ObjectA, ObjectB, ObjectC, OneToOneCategory, Order, OrderItem,
+    Page, Paragraph, Person, Plaything, PointerA, Program, ProxyCategory,
+    ProxyObjectA, ProxyObjectB, Ranking, Related, RelatedIndividual,
+    RelatedObject, Report, ReportComment, ReservedName, Responsibility, School,
+    SharedConnection, SimpleCategory, SingleObject, SpecialCategory, Staff,
+    StaffUser, Student, Tag, Task, Teacher, Ticket21203Child,
+    Ticket21203Parent, Ticket23605A, Ticket23605B, Ticket23605C, TvChef, Valid,
+    X,
 )
 
 
@@ -41,17 +43,17 @@ class Queries1Tests(TestCase):
         cls.t5 = Tag.objects.create(name='t5', parent=cls.t3)
 
         cls.n1 = Note.objects.create(note='n1', misc='foo', id=1)
-        n2 = Note.objects.create(note='n2', misc='bar', id=2)
+        cls.n2 = Note.objects.create(note='n2', misc='bar', id=2)
         cls.n3 = Note.objects.create(note='n3', misc='foo', id=3)
 
         ann1 = Annotation.objects.create(name='a1', tag=cls.t1)
         ann1.notes.add(cls.n1)
         ann2 = Annotation.objects.create(name='a2', tag=t4)
-        ann2.notes.add(n2, cls.n3)
+        ann2.notes.add(cls.n2, cls.n3)
 
         # Create these out of order so that sorting by 'id' will be different to sorting
         # by 'info'. Helps detect some problems later.
-        cls.e2 = ExtraInfo.objects.create(info='e2', note=n2, value=41)
+        cls.e2 = ExtraInfo.objects.create(info='e2', note=cls.n2, value=41)
         e1 = ExtraInfo.objects.create(info='e1', note=cls.n1, value=42)
 
         cls.a1 = Author.objects.create(name='a1', num=1001, extra=e1)
@@ -65,7 +67,7 @@ class Queries1Tests(TestCase):
         time4 = datetime.datetime(2007, 12, 20, 21, 0, 0)
         cls.i1 = Item.objects.create(name='one', created=cls.time1, modified=cls.time1, creator=cls.a1, note=cls.n3)
         cls.i1.tags.set([cls.t1, cls.t2])
-        cls.i2 = Item.objects.create(name='two', created=cls.time2, creator=cls.a2, note=n2)
+        cls.i2 = Item.objects.create(name='two', created=cls.time2, creator=cls.a2, note=cls.n2)
         cls.i2.tags.set([cls.t1, cls.t3])
         cls.i3 = Item.objects.create(name='three', created=time3, creator=cls.a2, note=cls.n3)
         i4 = Item.objects.create(name='four', created=time4, creator=cls.a4, note=cls.n3)
@@ -402,10 +404,10 @@ class Queries1Tests(TestCase):
 
     def test_avoid_infinite_loop_on_too_many_subqueries(self):
         x = Tag.objects.filter(pk=1)
-        local_recursion_limit = 127
+        local_recursion_limit = sys.getrecursionlimit() // 16
         msg = 'Maximum recursion depth exceeded: too many subqueries.'
-        with self.assertRaisesMessage(RuntimeError, msg):
-            for i in range(local_recursion_limit * 2):
+        with self.assertRaisesMessage(RecursionError, msg):
+            for i in range(local_recursion_limit + 2):
                 x = Tag.objects.filter(pk__in=x)
 
     def test_reasonable_number_of_subq_aliases(self):
@@ -1173,6 +1175,16 @@ class Queries1Tests(TestCase):
         )
         self.assertTrue(qs.first())
 
+    def test_excluded_intermediary_m2m_table_joined(self):
+        self.assertSequenceEqual(
+            Note.objects.filter(~Q(tag__annotation__name=F('note'))),
+            [self.n1, self.n2, self.n3],
+        )
+        self.assertSequenceEqual(
+            Note.objects.filter(tag__annotation__name='a1').filter(~Q(tag__annotation__name=F('note'))),
+            [],
+        )
+
 
 class Queries2Tests(TestCase):
     @classmethod
@@ -1450,6 +1462,14 @@ class Queries4Tests(TestCase):
         CategoryItem.objects.create(category=c2)
         CategoryItem.objects.create(category=c1)
         self.assertSequenceEqual(SimpleCategory.objects.order_by('categoryitem', 'pk'), [c1, c2, c1])
+
+    def test_filter_reverse_non_integer_pk(self):
+        date_obj = DateTimePK.objects.create()
+        extra_obj = ExtraInfo.objects.create(info='extra', date=date_obj)
+        self.assertEqual(
+            DateTimePK.objects.filter(extrainfo=extra_obj).get(),
+            date_obj,
+        )
 
     def test_ticket10181(self):
         # Avoid raising an EmptyResultSet if an inner query is probably
@@ -2775,6 +2795,15 @@ class ExcludeTests(TestCase):
         alex_nontech_employers = alex.employers.exclude(
             employment__title__in=('Engineer', 'Developer')).distinct().order_by('name')
         self.assertSequenceEqual(alex_nontech_employers, [google, intel, microsoft])
+
+    def test_exclude_reverse_fk_field_ref(self):
+        tag = Tag.objects.create()
+        Note.objects.create(tag=tag, note='note')
+        annotation = Annotation.objects.create(name='annotation', tag=tag)
+        self.assertEqual(Annotation.objects.exclude(tag__note__note=F('name')).get(), annotation)
+
+    def test_exclude_with_circular_fk_relation(self):
+        self.assertEqual(ObjectB.objects.exclude(objecta__objectb__name=F('name')).count(), 0)
 
 
 class ExcludeTest17600(TestCase):

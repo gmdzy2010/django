@@ -180,6 +180,8 @@ test_data = (
     ('named_optional', '/optional/1/', [], {'arg1': 1}),
     ('named_optional', '/optional/1/2/', [1, 2], {}),
     ('named_optional', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
+    ('named_optional_terminated', '/optional/1/', [1], {}),
+    ('named_optional_terminated', '/optional/1/', [], {'arg1': 1}),
     ('named_optional_terminated', '/optional/1/2/', [1, 2], {}),
     ('named_optional_terminated', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
     ('hardcoded', '/hardcoded/', [], {}),
@@ -997,8 +999,11 @@ class RequestURLconfTests(SimpleTestCase):
         Test reversing an URL from the *default* URLconf from inside
         a response middleware.
         """
-        message = "Reverse for 'outer' not found."
-        with self.assertRaisesMessage(NoReverseMatch, message):
+        msg = (
+            "Reverse for 'outer' not found. 'outer' is not a valid view "
+            "function or pattern name."
+        )
+        with self.assertRaisesMessage(NoReverseMatch, msg):
             self.client.get('/second_test/')
 
     @override_settings(
@@ -1070,7 +1075,8 @@ class DefaultErrorHandlerTests(SimpleTestCase):
         response = self.client.get('/test/')
         self.assertEqual(response.status_code, 404)
 
-        with self.assertRaisesMessage(ValueError, "I don't think I'm getting good"):
+        msg = "I don't think I'm getting good value for this view"
+        with self.assertRaisesMessage(ValueError, msg):
             self.client.get('/bad_view/')
 
 

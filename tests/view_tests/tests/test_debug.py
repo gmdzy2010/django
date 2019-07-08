@@ -7,6 +7,7 @@ import tempfile
 import threading
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -20,7 +21,8 @@ from django.utils.functional import SimpleLazyObject
 from django.utils.safestring import mark_safe
 from django.views.debug import (
     CLEANSED_SUBSTITUTE, CallableSettingWrapper, ExceptionReporter,
-    cleanse_setting, technical_500_response,
+    Path as DebugPath, cleanse_setting, default_urlconf,
+    technical_404_response, technical_500_response,
 )
 
 from ..views import (
@@ -222,6 +224,19 @@ class DebugViewTests(SimpleTestCase):
             status_code=404
         )
 
+    def test_template_encoding(self):
+        """
+        The templates are loaded directly, not via a template loader, and
+        should be opened as utf-8 charset as is the default specified on
+        template engines.
+        """
+        with mock.patch.object(DebugPath, 'open') as m:
+            default_urlconf(None)
+            m.assert_called_once_with(encoding='utf-8')
+            m.reset_mock()
+            technical_404_response(mock.MagicMock(), mock.Mock())
+            m.assert_called_once_with(encoding='utf-8')
+
 
 class DebugViewQueriesAllowedTests(SimpleTestCase):
     # May need a query to initialize MySQL connection
@@ -289,7 +304,7 @@ class ExceptionReporterTests(SimpleTestCase):
         reporter = ExceptionReporter(request, exc_type, exc_value, tb)
         html = reporter.get_traceback_html()
         self.assertInHTML('<h1>ValueError at /test_view/</h1>', html)
-        self.assertIn('<pre class="exception_value">Can&#39;t find my keys</pre>', html)
+        self.assertIn('<pre class="exception_value">Can&#x27;t find my keys</pre>', html)
         self.assertIn('<th>Request Method:</th>', html)
         self.assertIn('<th>Request URL:</th>', html)
         self.assertIn('<h3 id="user-info">USER</h3>', html)
@@ -310,7 +325,7 @@ class ExceptionReporterTests(SimpleTestCase):
         reporter = ExceptionReporter(None, exc_type, exc_value, tb)
         html = reporter.get_traceback_html()
         self.assertInHTML('<h1>ValueError</h1>', html)
-        self.assertIn('<pre class="exception_value">Can&#39;t find my keys</pre>', html)
+        self.assertIn('<pre class="exception_value">Can&#x27;t find my keys</pre>', html)
         self.assertNotIn('<th>Request Method:</th>', html)
         self.assertNotIn('<th>Request URL:</th>', html)
         self.assertNotIn('<h3 id="user-info">USER</h3>', html)
@@ -448,7 +463,7 @@ class ExceptionReporterTests(SimpleTestCase):
         reporter = ExceptionReporter(request, None, "I'm a little teapot", None)
         html = reporter.get_traceback_html()
         self.assertInHTML('<h1>Report at /test_view/</h1>', html)
-        self.assertIn('<pre class="exception_value">I&#39;m a little teapot</pre>', html)
+        self.assertIn('<pre class="exception_value">I&#x27;m a little teapot</pre>', html)
         self.assertIn('<th>Request Method:</th>', html)
         self.assertIn('<th>Request URL:</th>', html)
         self.assertNotIn('<th>Exception Type:</th>', html)
@@ -461,7 +476,7 @@ class ExceptionReporterTests(SimpleTestCase):
         reporter = ExceptionReporter(None, None, "I'm a little teapot", None)
         html = reporter.get_traceback_html()
         self.assertInHTML('<h1>Report</h1>', html)
-        self.assertIn('<pre class="exception_value">I&#39;m a little teapot</pre>', html)
+        self.assertIn('<pre class="exception_value">I&#x27;m a little teapot</pre>', html)
         self.assertNotIn('<th>Request Method:</th>', html)
         self.assertNotIn('<th>Request URL:</th>', html)
         self.assertNotIn('<th>Exception Type:</th>', html)
@@ -493,7 +508,7 @@ class ExceptionReporterTests(SimpleTestCase):
         except Exception:
             exc_type, exc_value, tb = sys.exc_info()
         html = ExceptionReporter(None, exc_type, exc_value, tb).get_traceback_html()
-        self.assertIn('<td class="code"><pre>&#39;&lt;p&gt;Local variable&lt;/p&gt;&#39;</pre></td>', html)
+        self.assertIn('<td class="code"><pre>&#x27;&lt;p&gt;Local variable&lt;/p&gt;&#x27;</pre></td>', html)
 
     def test_unprintable_values_handling(self):
         "Unprintable values should not make the output generation choke."
@@ -592,7 +607,7 @@ class ExceptionReporterTests(SimpleTestCase):
         An exception report can be generated for requests with 'items' in
         request GET, POST, FILES, or COOKIES QueryDicts.
         """
-        value = '<td>items</td><td class="code"><pre>&#39;Oops&#39;</pre></td>'
+        value = '<td>items</td><td class="code"><pre>&#x27;Oops&#x27;</pre></td>'
         # GET
         request = self.rf.get('/test_view/?items=Oops')
         reporter = ExceptionReporter(request, None, None, None)
@@ -613,13 +628,13 @@ class ExceptionReporterTests(SimpleTestCase):
             'items (application/octet-stream)&gt;</pre></td>',
             html
         )
-        # COOKES
+        # COOKIES
         rf = RequestFactory()
         rf.cookies['items'] = 'Oops'
         request = rf.get('/test_view/')
         reporter = ExceptionReporter(request, None, None, None)
         html = reporter.get_traceback_html()
-        self.assertInHTML('<td>items</td><td class="code"><pre>&#39;Oops&#39;</pre></td>', html)
+        self.assertInHTML('<td>items</td><td class="code"><pre>&#x27;Oops&#x27;</pre></td>', html)
 
     def test_exception_fetching_user(self):
         """
@@ -647,6 +662,20 @@ class ExceptionReporterTests(SimpleTestCase):
 
         text = reporter.get_traceback_text()
         self.assertIn('USER: [unable to retrieve the current user]', text)
+
+    def test_template_encoding(self):
+        """
+        The templates are loaded directly, not via a template loader, and
+        should be opened as utf-8 charset as is the default specified on
+        template engines.
+        """
+        reporter = ExceptionReporter(None, None, None, None)
+        with mock.patch.object(DebugPath, 'open') as m:
+            reporter.get_traceback_html()
+            m.assert_called_once_with(encoding='utf-8')
+            m.reset_mock()
+            reporter.get_traceback_text()
+            m.assert_called_once_with(encoding='utf-8')
 
 
 class PlainTextReportTests(SimpleTestCase):
@@ -744,7 +773,7 @@ class PlainTextReportTests(SimpleTestCase):
         reporter = ExceptionReporter(request, None, None, None)
         text = reporter.get_traceback_text()
         self.assertIn('items = <InMemoryUploadedFile:', text)
-        # COOKES
+        # COOKIES
         rf = RequestFactory()
         rf.cookies['items'] = 'Oops'
         request = rf.get('/test_view/')

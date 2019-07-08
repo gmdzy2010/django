@@ -9,6 +9,7 @@ from django.shortcuts import render
 from django.template import RequestContext, Template
 from django.urls import path, re_path, reverse_lazy
 from django.views.decorators.cache import never_cache
+from django.views.i18n import set_language
 
 
 class CustomRequestAuthenticationForm(AuthenticationForm):
@@ -90,7 +91,10 @@ urlpatterns = auth_urlpatterns + [
     path('password_reset_from_email/', views.PasswordResetView.as_view(from_email='staffmember@example.com')),
     path(
         'password_reset_extra_email_context/',
-        views.PasswordResetView.as_view(extra_email_context={'greeting': 'Hello!'})),
+        views.PasswordResetView.as_view(
+            extra_email_context={'greeting': 'Hello!', 'domain': 'custom.example.com'},
+        ),
+    ),
     path(
         'password_reset/custom_redirect/',
         views.PasswordResetView.as_view(success_url='/custom/')),
@@ -109,6 +113,10 @@ urlpatterns = auth_urlpatterns + [
     re_path(
         '^reset/custom/named/{}/$'.format(uid_token),
         views.PasswordResetConfirmView.as_view(success_url=reverse_lazy('password_reset')),
+    ),
+    re_path(
+        '^reset/custom/token/{}/$'.format(uid_token),
+        views.PasswordResetConfirmView.as_view(reset_url_token='set-passwordcustom'),
     ),
     re_path(
         '^reset/post_reset_login/{}/$'.format(uid_token),
@@ -148,6 +156,7 @@ urlpatterns = auth_urlpatterns + [
     path('permission_required_exception/', permission_required_exception),
     path('login_and_permission_required_exception/', login_and_permission_required_exception),
 
+    path('setlang/', set_language, name='set_language'),
     # This line is only required to render the password reset with is_admin=True
     path('admin/', admin.site.urls),
 ]

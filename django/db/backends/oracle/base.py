@@ -13,6 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import utils
 from django.db.backends.base.base import BaseDatabaseWrapper
+from django.utils.asyncio import async_unsafe
 from django.utils.encoding import force_bytes, force_str
 from django.utils.functional import cached_property
 
@@ -213,7 +214,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return settings_dict['NAME']
 
     def _connect_string(self):
-        return '%s/\\"%s\\"@%s' % (self.settings_dict['USER'], self.settings_dict['PASSWORD'], self._dsn())
+        return '%s/"%s"@%s' % (self.settings_dict['USER'], self.settings_dict['PASSWORD'], self._dsn())
 
     def get_connection_params(self):
         conn_params = self.settings_dict['OPTIONS'].copy()
@@ -221,6 +222,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             del conn_params['use_returning_into']
         return conn_params
 
+    @async_unsafe
     def get_new_connection(self, conn_params):
         return Database.connect(
             user=self.settings_dict['USER'],
@@ -269,6 +271,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         if not self.get_autocommit():
             self.commit()
 
+    @async_unsafe
     def create_cursor(self, name=None):
         return FormatStylePlaceholderCursor(self.connection)
 
